@@ -1,0 +1,8 @@
+[package]
+name = "employees"
+version = "0.1.0"
+authors = ["mzezulka"]
+
+[dependencies]
+custom_derive = "0.1.7"
+enum_derive = "0.1.7"
