@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     // Parser tests
     #[test]
     fn empty_command() {
@@ -9,7 +9,7 @@ mod tests {
 
     #[test]
     fn illegal_command() {
-        assert!(is_illegal_command(&::parse_user_input("delete"))); // only add and list exist
+        assert!(is_illegal_command(&::parse_user_input("delete")));
         assert!(is_illegal_command(&::parse_user_input("add kyle to kyle"))); // kyle dept missing
         assert!(is_illegal_command(&::parse_user_input("list foo"))); // foo dept does not exist
     }
@@ -27,7 +27,7 @@ mod tests {
         ::react(&mut comp, cmd); // Ignore the string here, we only want to check that the state
                                  // for the Company comp has changed
         let cmd = ::parse_user_input("list");
-        assert_eq!(::react(&mut comp, cmd), "HR\n\tSam".to_string());
+        assert_eq!(::react(&mut comp, cmd), "HR\n\tSam\n\n".to_string());
     }
 
     #[test]
@@ -40,13 +40,13 @@ mod tests {
             ::react(&mut comp, cmd);
         }
         let cmd = ::parse_user_input("list");
-        assert_eq!(::react(&mut comp, cmd), "HR\n\tSamFinance\n\tKyle\tAnnieSales\n\tBobby".to_string());
+        assert_eq!(::react(&mut comp, cmd), "Finance\n\tAnnie\n\tKyle\n\nHR\n\tSam\n\nSales\n\tBobby\n\n".to_string());
         let cmd = ::parse_user_input("list Finance");
-        assert_eq!(::react(&mut comp, cmd), "Kyle\nAnnie\n".to_string());
+        assert_eq!(::react(&mut comp, cmd), "Annie\nKyle\n".to_string());
     }
 
     fn company_factory() -> ::Company {
-        ::Company  { name : String::from("Testers, Inc."), employees : HashMap::new() }
+        ::Company  { name : String::from("Testers, Inc."), employees : BTreeMap::new() }
     }
 
     fn is_illegal_command(cmd : &::Command) -> bool {
@@ -62,7 +62,7 @@ extern crate custom_derive;
 #[macro_use]
 extern crate enum_derive;
 
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
 struct Employee {
     first_name : String
 }
@@ -72,11 +72,8 @@ impl std::fmt::Display for Employee {
         write!(f, "{}", self.first_name)
     }
 }
-
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::collections::hash_map::Entry;
-type Employees = HashMap<Department, HashSet<Employee>>;
+use std::collections::{BTreeMap, BTreeSet};
+type Employees = BTreeMap<Department, BTreeSet<Employee>>;
 struct Company {
     name : String,
     employees : Employees
@@ -84,15 +81,39 @@ struct Company {
 
 
 custom_derive! {
-    #[derive(Debug, EnumFromStr, PartialEq, Eq, Hash)]
+    #[derive(Debug, EnumFromStr, PartialEq, Eq)]
     enum Department {
-        Accounting, Marketing, CustomerService, HR, Sales, IT, QA, Finance
+        Accounting,
+        CustomerService,
+        Marketing,
+        HR,
+        Sales,
+        IT,
+        QA,
+        Finance
+    }
+}
+
+// By default, the Ord trait for enums is defined by top-to-bottom declaration of its variants.
+// We really do not want this in this case. Instead, order variants by the variant name.
+// https://doc.rust-lang.org/std/cmp/trait.Ord.html#derivable
+use std::cmp::Ordering;
+impl Ord for Department {
+    fn cmp(&self, other: &Department) -> Ordering {
+        format!("{:?}", self).cmp(&format!("{:?}", other))
+    }
+}
+
+impl PartialOrd for Department {
+    fn partial_cmp(&self, other: &Department) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
 #[derive(Debug, PartialEq)]
 enum Command {
     Empty,
+    Quit,
     Add(Employee, Department),
     List(Department),
     ListAll,
@@ -138,6 +159,7 @@ fn add_cmd(mut it : std::str::SplitWhitespace) -> Command {
 // Add <NAME> to <DEPT>
 // List <DEPT>
 // List
+// Quit
 //
 // Spaces between tokens can be of arbitrary positive size.
 fn parse_user_input(input : &str) -> Command {
@@ -156,6 +178,7 @@ fn parse_user_input(input : &str) -> Command {
                 }
             }
         },
+        Some("quit") => Command::Quit,
         None => Command::Empty,
         _ => Command::Illegal("Unknown command.")
     }
@@ -183,10 +206,11 @@ fn wait_for_command() -> Command {
     }
 }
 
+use std::collections::btree_map::Entry;
 fn add_employee(comp : &mut Company, emp : Employee, dept : Department) {
     match comp.employees.entry(dept) {
         Entry::Vacant(e) => {
-            let mut new_value = HashSet::new();
+            let mut new_value = BTreeSet::new();
             new_value.insert(emp);
             e.insert(new_value);
         }, // we must use surrounding brackets here
@@ -201,7 +225,7 @@ fn list_for_department(comp : &Company, dept : &Department) -> String {
         Some(v) => {
             let mut res = String::new();
             for emp in v.iter() {
-                res.push_str(&format!("{}", emp));
+                res.push_str(&format!("{}\n", emp));
             }
             res
         },
@@ -211,12 +235,12 @@ fn list_for_department(comp : &Company, dept : &Department) -> String {
 
 fn list_all(comp : &Company) -> String {
     let mut res = String::new();
-    for (dept, emps) in comp.employees.iter() {
+    for (dept, emps) in &comp.employees {
         res.push_str(&format!("{:?}\n", dept));
         for emp in emps.iter() {
             res.push_str(&format!("\t{}\n", emp));
         }
-        res.push_str("\n\n");
+        res.push_str("\n");
     }
     res
 }
@@ -232,13 +256,19 @@ fn react(comp : &mut Company, cmd :Command) -> String {
         List(dept) => list_for_department(comp, &dept),
         ListAll => list_all(&comp),
         Illegal(msg) => msg.to_string(),
-        Empty => String::new()
+        Empty => String::new(),
+        _ => panic!("Unexpected command.")
     }
 }
 
 fn main() {
-    let mut company = Company  { name : String::from("Giggle, Inc."), employees : HashMap::new() };
+    let mut company = Company  { name : String::from("Giggle, Inc."), employees : BTreeMap::new() };
     loop {
-        println!("{}", react(&mut company, wait_for_command()));
+        let next_cmd = wait_for_command();
+        if let Command::Quit = next_cmd {
+            std::process::exit(0);
+        } else {
+            println!("{}", react(&mut company, next_cmd));
+        }
     }
 }
