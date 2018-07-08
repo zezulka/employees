@@ -1,3 +1,62 @@
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    // Parser tests
+    #[test]
+    fn empty_command() {
+        assert_eq!(::parse_user_input("  \t  "), ::Command::Empty);
+    }
+
+    #[test]
+    fn illegal_command() {
+        assert!(is_illegal_command(&::parse_user_input("delete"))); // only add and list exist
+        assert!(is_illegal_command(&::parse_user_input("add kyle to kyle"))); // kyle dept missing
+        assert!(is_illegal_command(&::parse_user_input("list foo"))); // foo dept does not exist
+    }
+
+    #[test]
+    fn empty_company() {
+        let cmd = ::parse_user_input("list");
+        assert_eq!(::react(&mut company_factory(), cmd), String::new());
+    }
+
+    #[test]
+    fn company_one_employee() {
+        let cmd = ::parse_user_input("add Sam to HR");
+        let mut comp = company_factory();
+        ::react(&mut comp, cmd); // Ignore the string here, we only want to check that the state
+                                 // for the Company comp has changed
+        let cmd = ::parse_user_input("list");
+        assert_eq!(::react(&mut comp, cmd), "HR\n\tSam".to_string());
+    }
+
+    #[test]
+    fn company_many_employees() {
+        let mut comp = company_factory();
+        for cmd in vec![::parse_user_input("add Sam to HR"),
+                         ::parse_user_input("add Kyle to Finance"),
+                         ::parse_user_input("add Annie to Finance"),
+                         ::parse_user_input("add Bobby to Sales")] {
+            ::react(&mut comp, cmd);
+        }
+        let cmd = ::parse_user_input("list");
+        assert_eq!(::react(&mut comp, cmd), "HR\n\tSamFinance\n\tKyle\tAnnieSales\n\tBobby".to_string());
+        let cmd = ::parse_user_input("list Finance");
+        assert_eq!(::react(&mut comp, cmd), "Kyle\nAnnie\n".to_string());
+    }
+
+    fn company_factory() -> ::Company {
+        ::Company  { name : String::from("Testers, Inc."), employees : HashMap::new() }
+    }
+
+    fn is_illegal_command(cmd : &::Command) -> bool {
+        match cmd {
+            ::Command::Illegal(_) => true,
+            _ => false
+        }
+    }
+}
+
 #[macro_use]
 extern crate custom_derive;
 #[macro_use]
@@ -8,10 +67,21 @@ struct Employee {
     first_name : String
 }
 
+impl std::fmt::Display for Employee {
+    fn fmt(&self, f : &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.first_name)
+    }
+}
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
-type Company = HashMap<Department, HashSet<Employee>>;
+type Employees = HashMap<Department, HashSet<Employee>>;
+struct Company {
+    name : String,
+    employees : Employees
+}
+
 
 custom_derive! {
     #[derive(Debug, EnumFromStr, PartialEq, Eq, Hash)]
@@ -20,12 +90,13 @@ custom_derive! {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum Command {
     Empty,
     Add(Employee, Department),
     List(Department),
     ListAll,
-    Illegal(String) // contains message containing the reason
+    Illegal(&'static str) // String contains the reason why the parse failed
 }
 
 fn dept_from_string(token : &str) -> Option<Department> {
@@ -37,26 +108,26 @@ fn dept_from_string(token : &str) -> Option<Department> {
 
 fn add_cmd(mut it : std::str::SplitWhitespace) -> Command {
     match it.next() {
-       None => Command::Illegal("You must provide an employee name.".to_string()),
+       None => Command::Illegal("You must provide an employee name."),
        Some(token) => {
            let empl = Employee { first_name : token.to_string() };
            match it.next() {
-               None => Command::Illegal("Add command syntax : add <NAME> to <DEPT>".to_string()),
+               None => Command::Illegal("Add command syntax : add <NAME> to <DEPT>"),
                Some("to") => {
                    match it.next() {
-                       None => Command::Illegal("You must provide a department the employee belongs to.".to_string()),
+                       None => Command::Illegal("You must provide a department the employee belongs to."),
                        Some(token) => {
                            if let None = it.next() {
                                if let Some(dept) = dept_from_string(token) {
                                    return Command::Add(empl, dept);
                                }
-                               return Command::Illegal("Department not found.".to_string());
+                               return Command::Illegal("Department not found.");
                            }
-                           Command::Illegal("Found too many tokens for the add command".to_string())
+                           Command::Illegal("Found too many tokens for the add command")
                        }
                    }
                },
-               _ => Command::Illegal("Expected 'to' separator.".to_string())
+               _ => Command::Illegal("Expected 'to' separator.")
            }
        }
     }
@@ -77,13 +148,16 @@ fn parse_user_input(input : &str) -> Command {
             match it.next() {
                 None => Command::ListAll,
                 Some(token) => {
-                    let dept : Department = token.parse().unwrap();
-                    Command::List(dept)
+                    match token.parse() {
+                        Ok(dept) =>  Command::List(dept), // rustc can infer type here because
+                                                          // the only possible type is valid
+                        Err(_) => Command::Illegal("Department not found.")
+                    }
                 }
             }
         },
         None => Command::Empty,
-        _ => Command::Illegal("Unknown command.".to_string())
+        _ => Command::Illegal("Unknown command.")
     }
 }
 
@@ -110,7 +184,7 @@ fn wait_for_command() -> Command {
 }
 
 fn add_employee(comp : &mut Company, emp : Employee, dept : Department) {
-    match comp.entry(dept) {
+    match comp.employees.entry(dept) {
         Entry::Vacant(e) => {
             let mut new_value = HashSet::new();
             new_value.insert(emp);
@@ -122,36 +196,49 @@ fn add_employee(comp : &mut Company, emp : Employee, dept : Department) {
     }
 }
 
-fn list_for_department(comp : &Company, dept : &Department) {
-    match comp.get(&dept) {
+fn list_for_department(comp : &Company, dept : &Department) -> String {
+    match comp.employees.get(&dept) {
         Some(v) => {
+            let mut res = String::new();
             for emp in v.iter() {
-                println!("{:?}", emp)
+                res.push_str(&format!("{}", emp));
             }
+            res
         },
-        None => println!("There are no employees assigned to this department.")
+        None => "There are no employees assigned to this department.".to_string()
     }
 }
 
-fn list_all(comp : &Company) {
-    for (key, emps) in comp.iter() {
-        println!("{:?}", key);
+fn list_all(comp : &Company) -> String {
+    let mut res = String::new();
+    for (dept, emps) in comp.employees.iter() {
+        res.push_str(&format!("{:?}\n", dept));
         for emp in emps.iter() {
-            println!("\t{:?}", emp)
+            res.push_str(&format!("\t{}\n", emp));
         }
+        res.push_str("\n\n");
+    }
+    res
+}
+
+fn react(comp : &mut Company, cmd :Command) -> String {
+    use Command::*;
+    match cmd {
+        Add(emp, dept) => {
+            let res = format!("Successfully added {} into {:?}.", emp, dept);
+            add_employee(comp, emp, dept); // move (into the Company struct) happens here
+            res
+        },
+        List(dept) => list_for_department(comp, &dept),
+        ListAll => list_all(&comp),
+        Illegal(msg) => msg.to_string(),
+        Empty => String::new()
     }
 }
 
 fn main() {
-    let mut company : Company = HashMap::new();
+    let mut company = Company  { name : String::from("Giggle, Inc."), employees : HashMap::new() };
     loop {
-        use Command::*;
-        match wait_for_command() {
-            Add(emp, dept) => add_employee(&mut company, emp, dept),
-            List(dept) => list_for_department(&company, &dept),
-            ListAll => list_all(&company),
-            Illegal(msg) => println!("{}", msg),
-            Empty => ()
-        }
+        println!("{}", react(&mut company, wait_for_command()));
     }
 }

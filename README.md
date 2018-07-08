@@ -4,5 +4,4 @@ Then let the user retrieve a list of all people in a department or all people
 in the company by department, sorted alphabetically.
 
 TODO:
-1. Sort the output for list commands,
-2. Write tests.
+1. Sort the output for list commands
